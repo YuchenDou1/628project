@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Philly Restaurant Rating by Block</title>
+    <script src="https://d3js.org/d3.v6.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+    <style>
+        body {
+            display: flex;
+            flex-direction: row; /* Ensure horizontal layout */
+            justify-content: center;
+            align-items: start;
+            min-height: 100vh; /* Minimum height */
+        }
+        #map {
+            flex-grow: 1; /* Allows map to grow and fill available space */
+            height: 600px;
+            width: calc(70% - 20px); /* Adjust width as needed, accounting for margin */
+        }
+        #map-info, #restaurant-details {
+            flex-basis: 30%; /* Adjust as needed */
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            margin-left: 10px;
+            padding: 10px;
+            box-sizing: border-box; /* Include padding and borders in the width */
+        }
+        svg {
+            width: 100%;
+            height: 100%;
+        }
+        path {
+            stroke: #fff;
+            stroke-width: 0.5;
+        }
+        .block-label {
+            fill: red;
+            font-size: 4px;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border: 1px solid black;
+            padding: 5px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div id="map">
+        <svg></svg>
+    </div>
+    <div id="map-info">
+    </div>
+    <div id="restaurant-details">
+    </div>
+
+    <script>
+        Promise.all([
+            d3.json('https://raw.githubusercontent.com/YuchenDou1/628project/main/philly.geojson'),
+            d3.csv('https://raw.githubusercontent.com/YuchenDou1/628project/main/rating.csv', d => {
+                d.average_rating = +d.average_rating;
+                d.latitude = +d.latitude;
+                d.longitude = +d.longitude;
+                return d;
+            })
+        ]).then(([geojsonData, restaurantData]) => {
+            geojsonData.features.forEach(feature => {
+                feature.properties.average_rating = 0;
+                feature.properties.count = 0;
+            });
+
+            restaurantData.forEach(restaurant => {
+                const point = turf.point([restaurant.longitude, restaurant.latitude]);
+                geojsonData.features.forEach(feature => {
+                    if (turf.booleanPointInPolygon(point, feature)) {
+                        feature.properties.average_rating += restaurant.average_rating;
+                        feature.properties.count += 1;
+                    }
+                });
+            });
+
+            geojsonData.features.forEach(feature => {
+                if (feature.properties.count > 0) {
+                    feature.properties.average_rating /= feature.properties.count;
+                } else {
+                    feature.properties.average_rating = null; 
+                }
+            });
+
+            const maxAverageRating = d3.max(geojsonData.features, feature => feature.properties.average_rating);
+            const colorScale = d3.scaleSequential(d3.interpolateBlues)
+                .domain([0, maxAverageRating]);
+
+            const mapSvg = d3.select('#map svg');
+            const projection = d3.geoMercator().fitSize([600, 600], geojsonData);
+            const pathGenerator = d3.geoPath().projection(projection);
+
+            mapSvg.selectAll('path')
+                .data(geojsonData.features)
+                .enter().append('path')
+                .attr('d', pathGenerator)
+                .attr('fill', d => d.properties.average_rating ? colorScale(d.properties.average_rating) : '#ccc')
+                .attr('stroke', '#222')
+                .on('click', function(event, d) {
+                    const areaRestaurants = restaurantData.filter(r => {
+                        const point = turf.point([r.longitude, r.latitude]);
+                        return turf.booleanPointInPolygon(point, d);
+                    });
+
+                    const infoDiv = d3.select('#map-info');
+                    infoDiv.html(''); 
+
+                    infoDiv.append('h2').text(d.properties.name);
+
+                    const table = infoDiv.append('table');
+                    table.append('thead').append('tr')
+                        .selectAll('th')
+                        .data(['Name', 'Average Rating']) 
+                        .enter().append('th')
+                        .text(d => d);
+
+                    const rows = table.append('tbody')
+                        .selectAll('tr')
+                        .data(areaRestaurants)
+                        .enter().append('tr');
+
+                    rows.selectAll('td')
+                        .data(row => [row.name, row.average_rating]) 
+                        .enter().append('td')
+                        .text(d => d);
+
+                    rows.on('click', function(event, rowData) {
+                        const detailsDiv = d3.select('#restaurant-details');
+                        detailsDiv.html(''); 
+
+                        Object.entries(rowData).forEach(([key, value]) => {
+                            detailsDiv.append('p').text(`${key}: ${value}`);
+                        });
+                    });
+                });
+
+            mapSvg.selectAll('.block-label')
+                .data(geojsonData.features)
+                .enter().append('text')
+                .attr('class', 'block-label')
+                .attr('transform', d => `translate(${pathGenerator.centroid(d)})`)
+                .text(d => d.properties.name);
+        });
+    </script>
+</body>
+</html>
